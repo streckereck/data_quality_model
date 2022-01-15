@@ -1,0 +1,69 @@
+---
+title: "OSM Bike Data quality model"
+output: html_notebook
+---
+
+The purpose of this project is to model data quality for bike infrastructure on 
+OpenStreetMap. 
+
+* Infrastructure data are used to allocate investments, so is data quality 
+equitably distributed?
+* How confident are we in data quality? Are there spatial patterns? Is it 
+related to socio-spatial variables?
+* Can we use the model to identify priority locations where OSM contributions 
+would make the biggest improvement? 
+
+**Analysis Unit, population density threshold**
+* We used dissemination areas (DAs) as the analysis unit, since they provide 
+within-city detail.
+* Provides consistency with OSM Can-BICS.
+* DAs are the smallest standard unit and cover the entire country. They contain
+a population between 400 to 700 people.
+* We will determine a minimum population density cutoff, since the intent is to
+analyse neighbourhoods within small towns, but not rural areas. Very large, 
+sparsely populated, rural DAs can be problematic.
+
+**Outcome**
+The outcome we are trying to predict is how well the mapped categories represents 
+what is on the ground. As part of the OSM Can-BICS project, we measured infrastructure
+on the ground in the summer of 2020 at 2000 points. We will use the training 
+portion (70%). We will need to figure out a way to generalize DAs with more 
+than one reference point within a DA.
+* reference points where the prediction is accurate or not (binary).
+* there are more points in places with greater road density.
+
+
+**Predictor Variables**
+Since it's prohibitively labour intensive collect reference data, we will use 
+predictor variables, which are related to the outcome variable, to estimate the 
+outcome in places where reference data hasn't been collected. Additionally, 
+these variables will help us understand relationships with the outcome variable.
+
+* Population density from Canada Census. .. and .. found a U-shaped relationship
+between completeness of roads and population density at a global scale, where 
+there are many mappers (and complete data) in highly populated places, and few
+roads to map (and also complete data, because there is little to map) in sparsely
+populated places. 
+* Median household income from Canada Census. This is the first socio-spatial 
+variable. It attempts to measure if people with higher incomes are represented 
+by better data quality?
+* % visible minority from Canada Census. This is a socio-spatial variable that 
+attempts to measure if radicalized people are represented by better data 
+quality?
+* City size (from containing CMA), using population from Canada Census. This 
+variable is included to investigate if there are differences between small (pop 
+< 50 k), medium (50 k >= pop < 500 k), or large (pop >= 500 k) cities.
+* km of infrastructure by comfort class (Can-BICS). Is data qaulity better where
+there is lots of infrastructure?
+* # of edits within a 3 km buffer of the centroid from Ohsome API. The idea is 
+that more editing will result in higher data quality.
+* # of editors within a 3 km buffer of the centroid from Ohsome API. The idea is 
+that the more editors in an area, the better the data quality.
+
+**Model**
+* We used a Random Forests Model.
+* We used variable importance and partial dependence plots to understand 
+relationships.
+**Fit statistics (e.g. RMSE)**
+
+**Results**
