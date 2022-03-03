@@ -1,69 +1,1041 @@
 ---
-title: "OSM Bike Data quality model"
-output: html_notebook
+title: "OSM Can-BICS data quality model"
+output:
+  html_notebook: default
+  word_document: default
 ---
 
-The purpose of this project is to model data quality for bike infrastructure on 
-OpenStreetMap. 
+## Background
 
-* Infrastructure data are used to allocate investments, so is data quality 
-equitably distributed?
-* How confident are we in data quality? Are there spatial patterns? Is it 
-related to socio-spatial variables?
-* Can we use the model to identify priority locations where OSM contributions 
-would make the biggest improvement? 
+The purpose of this project is to understand spatial variability in data quality 
+for bike infrastructure in open data (from cities) and OpenStreetMap. 
 
-**Analysis Unit, population density threshold**
-* We used dissemination areas (DAs) as the analysis unit, since they provide 
-within-city detail.
-* Provides consistency with OSM Can-BICS.
-* DAs are the smallest standard unit and cover the entire country. They contain
+* Infrastructure data are used to allocate infrastructure investments that can
+improve safety for active transportation and increase active transportation 
+rates.
+* Data quality can influence the equity of infrastructure investments (good data
+are needed to make good decisions), possibly disproportionately impacting safety 
+for individuals in equity-seeking groups.
+* Is data quality equitably distributed?
+    * can we predict data quality (lack of data quality) using sociospatial 
+    variables related to income and racial composition?
+    * Are there spatial patterns in data quality? Do these relate to the spatial
+    patterns of sociospatial variables?
+* Can we create a model to identify priority locations for OSM contributions and
+to inform fitness for use decisions for infrastructure data?
+
+**Hypotheses**
+
+1. Data quality for bike infrastructure is unevenly distributed in space.
+2. Data quality is lower in places with spatial equity concerns.
+
+## Methods
+
+**Approach**
+
+1. Explore relationships between sociospatial variables and bike infrastructure
+reference data points.
+    * Explore univariate relationships (graphs and maps).
+
+  
+2. Model data quality for reference points (n = 2000).
+3. Model data quality all neighbourhoods in Canada using OSM intrinsic 
+indicators of data quality as an outcome (# of mappers, # of edits).
+
+**Analysis unit**
+
+* In the exploratory analysis and the first model, we will apply a 100 m buffer 
+to the sample points, since census boundaries are often on roads.
+   * census data obtained for dissemination areas will be attributed to the 
+   points using area weighted means.
+* In the second model, we will apply a X km buffer to the population weighted 
+centroids for dissemination areas (DAs), to provide within-city detail.
+   * Neighbourhood sized.
+   * Provides consistency with OSM Can-BICS.
+   * DAs are the smallest standard unit and cover the entire country. They contain
 a population between 400 to 700 people.
-* We will determine a minimum population density cutoff, since the intent is to
-analyse neighbourhoods within small towns, but not rural areas. Very large, 
-sparsely populated, rural DAs can be problematic.
+    * smaller where population density is higher.
+    * very large rural DAs can make analyses difficult.
+* Start in Vancouver and expand.
 
-**Outcome**
-The outcome we are trying to predict is how well the mapped categories represents 
-what is on the ground. As part of the OSM Can-BICS project, we measured infrastructure
-on the ground in the summer of 2020 at 2000 points. We will use the training 
-portion (70%). We will need to figure out a way to generalize DAs with more 
-than one reference point within a DA.
-* reference points where the prediction is accurate or not (binary).
-* there are more points in places with greater road density.
+
+**Outcomes**
+
+* The desired outcome is our ability to accurately predict Can-BICS class, 
+relative to ground reference data both for:
+   * open data, and
+   * OSM Can-BICS.
+   * Mapathon edits are another indicator of data quality (just Vancouver and 
+   Edmonton have sufficient density to form hotspots). The presence of edits 
+   indicate a lack of quality. Mapathon edits are lines - use the top 10% of 
+   kernal density.
+```{r, echo = F, include = F}
+library(sf)
+library(tidyverse)
+library(mapview)
+library(ggmap)
+library(ggspatial)
+library(spatstat) #  KDE
+library(maptools)
+library(raster)
+
+# projections
+geographic <- 4326
+lambert <- 3347
+
+
+source("../osm_infrastructure/code/Can_BICS_OSM_functions.R")
+
+reference_points <- st_read("../osm_infrastructure/data/test_cities/reference_predicted.gpkg")
+names(reference_points)
+
+# reference
+reference_points$Can_BICS_ground_class <- Can_BICS_class(reference_points$Can_BICS_ground)
+reference_points$Can_BICS_ground_class <- reference_points$Can_BICS_ground_class %>%
+  recode("None" = "Non-Conforming")
+table(reference_points$Can_BICS_ground_class)
+
+# open data
+reference_points$Can_BICS_stratum_class <- Can_BICS_class(reference_points$Can_BICS_stratum)
+reference_points$Can_BICS_stratum_class <- reference_points$Can_BICS_stratum_class %>%
+  recode("None" = "Non-Conforming")
+table(reference_points$Can_BICS_stratum_class)
+
+# osm
+reference_points$Can_BICS_class <- Can_BICS_class(reference_points$Can_BICS)
+reference_points$Can_BICS_class <- reference_points$Can_BICS_class %>%
+  recode("None" = "Non-Conforming")
+table(reference_points$Can_BICS_class)
+
+reference_points$match_osm <- reference_points$Can_BICS_ground_class == 
+  reference_points$Can_BICS_class
+
+reference_points$match_open_data <- reference_points$Can_BICS_ground_class == 
+  reference_points$Can_BICS_stratum_class
+
+reference_points_vancouver <- reference_points %>%
+  filter(CSDNAME %in% "Vancouver")
+
+
+st_write(reference_points_vancouver,
+         "data/reference_predicted_vancouver.gpkg",
+         delete_dsn = T)
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+  colour_scheme <- c("7570b3",
+                     "#1b9e77")
+  
+  My_Theme = theme(
+  axis.text.x=element_blank(),
+  axis.text.y=element_blank(),
+  axis.ticks=element_blank(),
+  panel.grid.major=element_blank(),
+  panel.grid.minor=element_blank(),
+  legend.position = "right")
+  
+  limits <- reference_points_vancouver %>% 
+  st_bbox() %>%
+  st_as_sfc() %>%
+  st_buffer(100) %>%
+  st_transform(4326) %>%
+  st_bbox() %>%
+  as.list()
+  
+  # geographic coords for map
+  reference_points_vancouver_geo <- reference_points_vancouver %>%
+    st_transform(4326)
+  
+  basemap <- get_stamenmap(bbox = c(left = limits$xmin,
+                                    bottom = limits$ymin,
+                                    right = limits$xmax,
+                                    top = limits$ymax), 
+                         maptype = "toner-background",
+                         crop = T,
+                         zoom = 12)
+  
+  
+  match_open_data_map <- ggmap(basemap) +
+  geom_sf(data = reference_points_vancouver_geo, 
+          aes(col = match_open_data), 
+          inherit.aes = FALSE,
+          size = 2) + 
+  scale_colour_manual(values = colour_scheme) +
+  labs(col = "match_open_data") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+  
+match_open_data_map
+
+```
+
+```{r, echo = FALSE, message=FALSE}
+  match_osm_data_map <- ggmap(basemap) +
+  geom_sf(data = reference_points_vancouver_geo, 
+          aes(col = match_osm), 
+          inherit.aes = FALSE,
+          size = 2) + 
+  scale_colour_manual(values = c("purple", "green")) +
+  labs(col = "match_osm") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+  match_osm_data_map
+```
+```{r, echo = FALSE, message=FALSE}
+osm_edits <- st_read("data/mapathon/OSM_Edits.shp") %>%
+  st_transform(3347)
+
+  colour_scheme_comfort <- c("#238443",
+                            "#c2e699",
+                            "#2b8cbe",
+                            "#969696")
+  
+  osm_edits_geo <- osm_edits %>%
+    st_transform(4327)
+
+  mapathon_map <- ggmap(basemap) +
+    # inset_raster(as.raster(mapathon_edits.KDE.rast.geo),
+    #              xmin = mapathon_edits.KDE.rast.geo@extent[1], 
+    #              xmax = mapathon_edits.KDE.rast.geo@extent[2],
+    #              ymin = mapathon_edits.KDE.rast.geo@extent[3], 
+    #              ymax = mapathon_edits.KDE.rast.geo@extent[4]) +
+    geom_sf(data = osm_edits_geo, 
+          aes(col = comfort_cl), 
+          inherit.aes = FALSE,
+          size = 3) + 
+  scale_colour_manual(values = colour_scheme_comfort) +
+  labs(col = "Mapathon edits (comfort class)") +
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+  mapathon_map
+
+```
+
+```{r stats_for_mapathon}
+library(knitr)
+csds <- st_read("C:/Users/16043/Documents/basemap/census_2016/census_subdivision_boundary/lcsd000a16a_e.shp")
+
+osm_edits_csds <- osm_edits %>% st_intersection(csds)
+osm_edits_csds$length <- st_length(osm_edits_csds) %>% as.numeric()
+osm_edits_csds$length <- round(osm_edits_csds$length / 1000, 0)
+
+osm_edits_csds_summary <- osm_edits_csds %>%
+  group_by(CSDNAME, PRNAME) %>%
+  summarise(total_length = sum(length)) %>%
+  filter(total_length > 0) %>% 
+  arrange(PRNAME, CSDNAME, -total_length) %>%
+  st_drop_geometry() %>%
+  rename('CSD Name' = CSDNAME,
+         'Province' = PRNAME,
+         'length (km)' = total_length)
+
+kable(osm_edits_csds_summary)
+
+osm_edits_type_summary <- osm_edits_csds %>%
+  group_by(infrastruc) %>%
+  summarise(total_length = sum(length)) %>%
+  filter(total_length > 0) %>% 
+  arrange(-total_length) %>%
+  st_drop_geometry() %>%
+  rename('Infrastructure Type' = infrastruc,
+         'length (km)' = total_length)
+
+kable(osm_edits_type_summary)
+
+```
+
+
+
+```{r, include = FALSE}
+# kde estimates
+bandwidth <- 500
+prank<-function(x) ifelse(is.na(x),NA,rank(x)/sum(!is.na(x)))
+targetProjection <- crs("+proj=longlat +datum=WGS84 +no_defs")
+
+
+window <- st_read("C:/Users/16043/Documents/basemap/census_2016/census_subdivision_cartographic/lcsd000b16a_e.shp") %>%
+  filter(CSDNAME %in% "Vancouver") %>%
+  st_transform(lambert) %>%
+  dplyr::select(CSDNAME)
+
+window.owin <- as.owin(as_Spatial(window))
+
+# errors for open data
+open_data_errors <- reference_points_vancouver %>%
+  filter(! match_open_data) %>%
+  dplyr::select(geom) %>%
+  as.ppp()
+
+Window(open_data_errors) <- window.owin
+
+open_data_errors.KDE <- density.ppp(x = open_data_errors,
+                                   kernel = "gaussian",
+                                   sigma = bandwidth, 
+                                   edge = F,
+                                   eps = 10)
+
+open_data_errors.KDE.rast <- raster(open_data_errors.KDE, crs = targetProjection)
+open_data_errors.KDE.rast@data@values <- prank(open_data_errors.KDE.rast@data@values)
+
+# errors for osm
+osm_errors <- reference_points_vancouver %>%
+  filter(! match_osm) %>%
+  dplyr::select(geom) %>%
+  as.ppp()
+
+Window(osm_errors) <- window.owin
+
+osm_errors.KDE <- density.ppp(x = osm_errors,
+                                   kernel = "gaussian",
+                                   sigma = bandwidth, 
+                                   edge = F,
+                                   eps = 10)
+
+osm_errors.KDE.rast <- raster(osm_errors.KDE, crs = targetProjection)
+osm_errors.KDE.rast@data@values <- prank(osm_errors.KDE.rast@data@values)
+
+# mapathon edits
+mapathon_edits <- osm_edits %>%
+  mutate(count = 1) %>%
+  dplyr::select(count) %>%
+  as_Spatial() %>%
+  as.psp()
+
+Window(mapathon_edits) <- window.owin
+
+mapathon_edits.KDE <- density.psp(x = mapathon_edits,
+                                   kernel = "gaussian",
+                                   sigma = bandwidth, 
+                                   edge = F,
+                                   eps = 10)
+
+mapathon_edits.KDE.rast <- raster(mapathon_edits.KDE, crs = targetProjection)
+mapathon_edits.KDE.rast@data@values <- prank(mapathon_edits.KDE.rast@data@values)
+plot(mapathon_edits.KDE.rast)
+
+```
+
+
+* NEXT STEPS: Ground reference data is not available outside of the 15 sample cities. Where 
+there is no ground reference data, we will use intrinsic indicators of data 
+quality from OSM, such as the number of contributions, the number of 
+contributors as a proxy.
+   * in the first model, this will be used as a predictor to evaluate the 
+   relationship with the desired outcome variable, and this will guide our
+   selection of a suitable proxy variable.
+   * in the second model, this will be an outcome variable.
 
 
 **Predictor Variables**
-Since it's prohibitively labour intensive collect reference data, we will use 
-predictor variables, which are related to the outcome variable, to estimate the 
-outcome in places where reference data hasn't been collected. Additionally, 
-these variables will help us understand relationships with the outcome variable.
 
-* Population density from Canada Census. .. and .. found a U-shaped relationship
-between completeness of roads and population density at a global scale, where 
-there are many mappers (and complete data) in highly populated places, and few
-roads to map (and also complete data, because there is little to map) in sparsely
-populated places. 
-* Median household income from Canada Census. This is the first socio-spatial 
-variable. It attempts to measure if people with higher incomes are represented 
-by better data quality?
-* % visible minority from Canada Census. This is a socio-spatial variable that 
-attempts to measure if radicalized people are represented by better data 
-quality?
-* City size (from containing CMA), using population from Canada Census. This 
-variable is included to investigate if there are differences between small (pop 
-< 50 k), medium (50 k >= pop < 500 k), or large (pop >= 500 k) cities.
-* km of infrastructure by comfort class (Can-BICS). Is data qaulity better where
-there is lots of infrastructure?
-* # of edits within a 3 km buffer of the centroid from Ohsome API. The idea is 
-that more editing will result in higher data quality.
-* # of editors within a 3 km buffer of the centroid from Ohsome API. The idea is 
-that the more editors in an area, the better the data quality.
+***Canada Census Variables***
 
-**Model**
-* We used a Random Forests Model.
+```{r, echo=F, message=FALSE}
+#geometry
+das <- st_read("C://Users/16043/Documents/basemap/census_2016/census_da_carto/lda_000b16a_e.shp") 
+
+
+library(cancensus)
+options(cancensus.api_key='CensusMapper_e0c23a6719376c837a4ae87e9e9227f2')
+options(cancensus.cache_path = 'C:/working/cancensus')
+
+vectors <- list_census_vectors("CA16")
+#print(vectors[vectors$vector %in% "v_CA16_5690",])
+
+census_data <- get_census(dataset='CA16',
+                          regions=list(PR=c("59","48","47","46","35","24","10",
+                                            "13","12","60","61","62")), 
+                          vectors=c(pop_dens = "v_CA16_406",
+                                    med_hous_inc = "v_CA16_2398",
+                                    vis_min_tot = "v_CA16_3954",
+                                    vis_min_pop = "v_CA16_3957",
+                                    non_vis_min_pop = "v_CA16_3996",
+                                    edu_tot = "v_CA16_5096",
+                                    edu_seconary = "v_CA16_5102",
+                                    edu_post_sec = "v_CA16_5105",
+                                    edu_major_tot = "v_CA16_5141",
+                                    edu_major_infotech = "v_CA16_5243",
+                                    ocu_tot = "v_CA16_5654",
+                                    ocu_na = "v_CA16_5657",
+                                    ocu_all = "v_CA16_5660",
+                                    ocu_mgmt = "v_CA16_5663",
+                                    ocu_busi = "v_CA16_5666",
+                                    ocu_sci = "v_CA16_5669",
+                                    ocu_health = "v_CA16_5672",
+                                    ocu_edu = "v_CA16_5675",
+                                    ocu_art = "v_CA16_5678",
+                                    ocu_sales = "v_CA16_5681",
+                                    ocu_trades = "v_CA16_5684",
+                                    ocu_natres = "v_CA16_5687",
+                                    ocu_man = "v_CA16_5690",
+                                    abor_tot = "v_CA16_3852",
+                                    abor_ident = "v_CA16_3855",
+                                    jtw_tot = "v_CA16_5792",
+                                    jtw_bike = "v_CA16_5807"),
+                          labels="short", 
+                          geo_format=NA, 
+                          level='DA')
+
+census_data_clean <- census_data %>%
+  mutate(bike_mode_share = round((100 * jtw_bike/jtw_tot), 0),
+         vis_min_perc = round((100 * vis_min_pop/vis_min_tot), 0),
+         non_vis_min_perc = round((100 * non_vis_min_pop/vis_min_tot), 0),
+         ind_perc = round((100 * abor_ident/abor_tot), 0),
+         edu_post_sec_perc = round((100 * edu_post_sec/edu_tot), 0),
+         edu_post_info_tech_perc = round((100 * edu_major_infotech/edu_tot), 0),
+         ocu_sci_perc = round((100 * ocu_sci/ocu_tot), 0),
+         ocu_mgmt_perc = round((100 * ocu_mgmt/ocu_tot), 0), 
+         ocu_busi_perc = round((100 * ocu_busi/ocu_tot), 0), 
+         ocu_health_perc = round((100 * ocu_health/ocu_tot), 0), 
+         ocu_edu_perc = round((100 * ocu_edu/ocu_tot), 0), 
+         ocu_art_perc = round((100 * ocu_art/ocu_tot), 0), 
+         ocu_trades_perc = round((100 * ocu_trades/ocu_tot), 0),
+         ocu_natres_perc = round((100 * ocu_natres/ocu_tot), 0), 
+         ocu_man_perc = round((100 * ocu_man/ocu_tot), 0)) %>%
+  dplyr::select(GeoUID,
+                med_hous_inc,
+                pop_dens,
+                med_hous_inc,
+                bike_mode_share,
+                vis_min_perc,
+                ind_perc,
+                edu_post_sec_perc,
+                edu_post_info_tech_perc,
+                ocu_sci_perc,
+                ocu_mgmt_perc,
+                ocu_busi_perc,
+                ocu_health_perc,
+                ocu_edu_perc,
+                ocu_art_perc,
+                ocu_trades_perc,
+                ocu_natres_perc,
+                ocu_man_perc)
+
+
+das_census <- das %>%
+  left_join(census_data_clean,
+            by = c("DAUID"= "GeoUID"))
+
+```  
+
+* Population density. 
+    * Barrington-Leigh (2017) found a U-shaped relationship between completeness 
+    of roads and population density at a global scale (compared to remote 
+    sensing). Densely populated places have many mappers, and sparsely populated 
+    places have few roads to map.
+    * Multiple studies show that rural areas may have less complete attribution, 
+    since the data source is more often bulk data uploads and bots, and less 
+    often local editing.
+    * We expect a positive association between quality and population density.
+```{r, echo = F, message = FALSE}
+library(tmap)
+
+
+pop_dens_map <- tm_shape(das_census %>% filter(CSDNAME %in% "Vancouver") %>%
+                           st_transform(4326)) + 
+  tm_fill("pop_dens", style="quantile", title = "Population Density") +
+  tm_borders(alpha = 0.1) +
+  tm_layout(legend.position = c("left", "bottom"), 
+            legend.title.size = 0.8,
+            legend.text.size = 0.25) +
+  tm_shape(reference_points_vancouver_geo) + 
+  tm_dots(#col = "match_osm",
+          shape = "match_osm",
+          size = 0.25)
+  
+  
+pop_dens_map
+
+```
+
+* Median household income from Canada Census as a measure of economic status.
+   * We expect a positive association between household income and data quality.
+```{r, echo = F, message = FALSE}
+library(tmap)
+
+
+med_inc_map <- tm_shape(das_census %>% filter(CSDNAME %in% "Vancouver") %>%
+                           st_transform(4326)) + 
+  tm_fill("med_hous_inc", style="quantile", title = "Median Household Income ($)") +
+  tm_borders(alpha = 0.1) +
+  tm_layout(legend.position = c("left", "bottom"), 
+            legend.title.size = 0.8,
+            legend.text.size = 0.5) +
+  tm_shape(reference_points_vancouver_geo) + 
+  tm_dots(#col = "match_osm",
+          shape = "match_osm",
+          size = 0.25)
+med_inc_map
+
+```
+* % of population that is a visible minority from Canada Census.
+   * We expect lower data quality where there are more people who are members of 
+   a visible minority group.
+```{r, echo = F, message = FALSE}
+library(tmap)
+
+
+vis_min_map <- tm_shape(das_census %>% filter(CSDNAME %in% "Vancouver") %>%
+                           st_transform(4326)) + 
+  tm_fill("vis_min_perc", style="quantile", title = "Visible Minorities (%)") +
+  tm_borders(alpha = 0.1) +
+  tm_layout(legend.position = c("left", "bottom"), 
+            legend.title.size = 0.8,
+            legend.text.size = 0.5) +
+  tm_shape(reference_points_vancouver_geo) + 
+  tm_dots(#col = "match_osm",
+          shape = "match_osm",
+          size = 0.25)
+vis_min_map
+
+```
+* Education. % of population with a post secondary degree.
+* Education. % of pop with a post secondary degree in information technology.
+    * We expect higher data quality where education is higher.
+```{r, echo = F, message = FALSE}
+library(tmap)
+
+
+educ_map <- tm_shape(das_census %>% filter(CSDNAME %in% "Vancouver") %>%
+                           st_transform(4326)) + 
+  tm_fill("edu_post_sec_perc", style="quantile", title = "Post-secondary education (%)") +
+  tm_borders(alpha = 0.1) +
+  tm_layout(legend.position = c("left", "bottom"), 
+            legend.title.size = 0.8,
+            legend.text.size = 0.5)+
+  tm_shape(reference_points_vancouver_geo) + 
+  tm_dots(#col = "match_osm",
+          shape = "match_osm",
+          size = 0.25)
+educ_map
+
+```
+
+```{r, echo = F, message = FALSE}
+library(tmap)
+
+
+educ_info_map <- tm_shape(das_census %>% filter(CSDNAME %in% "Vancouver") %>%
+                           st_transform(4326)) + 
+  tm_fill("edu_post_info_tech_perc", style="quantile", title = "Post-secondary education in information technology (%)") +
+  tm_borders(alpha = 0.1) +
+  tm_layout(legend.position = c("left", "bottom"), 
+            legend.title.size = 0.8,
+            legend.text.size = 0.5) +
+  tm_shape(reference_points_vancouver_geo) + 
+  tm_dots(#col = "match_osm",
+          shape = "match_osm",
+          size = 0.25)
+educ_info_map
+
+```
+* Occupation % of population employed in science.
+    * We expect higher data quality where more people work in science.
+
+```{r, echo = F, message = FALSE}
+library(tmap)
+
+
+ocu_info_map <- tm_shape(das_census %>% filter(CSDNAME %in% "Vancouver") %>%
+                           st_transform(4326)) + 
+  tm_fill("ocu_sci_perc", style="quantile", title = "Science occupation (%)") +
+  tm_borders(alpha = 0.1) +
+  tm_layout(legend.position = c("left", "bottom"), 
+            legend.title.size = 0.8,
+            legend.text.size = 0.5) +
+  tm_shape(reference_points_vancouver_geo) + 
+  tm_dots(#col = "match_osm",
+          shape = "match_osm",
+          size = 0.25)
+ocu_info_map
+
+```
+
+* The [Canadian Index of Multiple Deprivation](https://www150.statcan.gc.ca/n1/pub/45-20-0001/452000012019002-eng.htm). 
+Composite indices related to the variables described above. 
+  1. Residential instability (rates of home ownership, persons living alone,
+  proportion of people who moved within five years, proportion of married 
+  people).
+  2. Economic dependency (people older than 65, people in the labour force,
+  ratio of employed population, dependency ratio, people recieving gov't 
+  transfer payments)
+  3. Ethno-cultural composition (visible minorities, foreign born, no knowledge 
+  of either official language, recent immigrants)
+  4. Situational composition (indigenous population, houses needing repair, 
+  population aged 25-64 without a highschool education)
+```{r, echo = F, warning=F}
+deprivation <- read_csv("data/deprivation/can_scores_quintiles_EN.csv") %>%
+  mutate(PRCDDA = as.character(PRCDDA)) %>%
+  rename(ethno_cultural = 'Ethno-cultural composition Quintiles',
+         ethno_cultural_score = 'Ethno-cultural composition Scores',
+         situational_vulnerability = 'Situational vulnerability Quintiles',
+         situational_vulnerability_score = 'Situational vulnerability Scores',
+         economic_dependency = 'Economic dependency Quintiles',
+         economic_dependency_score = 'Economic dependency Scores',
+         residential_instability = 'Residential instability Quintiles',
+         residential_instability_score = 'Residential instability Scores') %>%
+  mutate(ethno_cultural = as.factor(ethno_cultural),
+         situational_vulnerability = as.factor(situational_vulnerability),
+         economic_dependency = as.factor(economic_dependency),
+         residential_instability = as.factor(residential_instability))
+
+das_dep <- das %>%
+  #filter(PRNAME %in% "British Columbia / Colombie-Britannique") %>%
+  left_join(deprivation,
+            by = c("DAUID"= "PRCDDA"))
+
+colour_scheme <- c("#ffffb2",
+                   "#fecc5c",
+                   "#fd8d3c",
+                   "#f03b20",
+                   "#bd0026")
+
+
+ethno_cultural_map <- ggmap(basemap) +
+  geom_sf(data = das_dep %>% st_transform(4326), 
+          aes(fill = ethno_cultural), 
+          inherit.aes = FALSE,
+          size = 0.25) + 
+  #scale_fill_manual(values = colour_scheme) +
+  scale_fill_brewer(palette = "YlOrBr") + 
+  labs(col = "Ethno-cultural deprivation") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+situational_vulnerability_map <- ggmap(basemap) +
+  geom_sf(data = das_dep %>% st_transform(4326), 
+          aes(fill = situational_vulnerability), 
+          inherit.aes = FALSE,
+          size = 0.25) + 
+  #scale_fill_manual(values = colour_scheme) +
+  scale_fill_brewer(palette = "YlOrBr") + 
+  labs(col = "Situational vulnerability") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+economic_dependency_map <- ggmap(basemap) +
+  geom_sf(data = das_dep %>% st_transform(4326), 
+          aes(fill = economic_dependency), 
+          inherit.aes = FALSE,
+          size = 0.25) + 
+  #scale_fill_manual(values = colour_scheme) +
+  scale_fill_brewer(palette = "YlOrBr") + 
+  labs(col = "Economica dependency") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+residential_instability_map <- ggmap(basemap) +
+  geom_sf(data = das_dep %>% st_transform(4326), 
+          aes(fill = residential_instability), 
+          inherit.aes = FALSE,
+          size = 0.25) + 
+  #scale_fill_manual(values = colour_scheme) +
+  scale_fill_brewer(palette = "YlOrBr") + 
+  labs(col = "Residential instability") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+ethno_cultural_map
+situational_vulnerability_map
+economic_dependency_map
+residential_instability_map
+  
+```
+    
+***Intrinsic indicators of data quality***
+
+* count of edits within 1 km bounding box of the centroid from Ohsome API. 
+   * We expect more editing will result in higher data quality. 
+* count of editors within 1 km bounding box of the centroid from Ohsome API. 
+   * We expect more editors will result in higher data quality. 
+
+**Models**
+
+* We first evaluated univariate relationships (above).
+* In the first model, we evaluated the sample points alone with correct 
+classification for open data and open street map as outcome variables.
+* In the second model, we evaluated the number of OSM edits and editors as 
+outcome variables.
+* We used a Random Forests models.
 * We used variable importance and partial dependence plots to understand 
 relationships.
-**Fit statistics (e.g. RMSE)**
 
-**Results**
+##Results
+
+***Outcome variables***
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+Can_BICS <- st_read("../osm_infrastructure/data/metrics/CAN_BICS_metric_Jan_2022.shp") %>%
+  st_drop_geometry() %>%
+  mutate(dauid = as.character(dauid),
+         CBICS_cat = as.factor(CBICS_cat),
+         ale_class = as.factor(ale_class)) %>%
+  dplyr::select(dauid,
+         bike_per,
+         st_per,
+         ale_index,
+         ale_class,
+         CBICS_cont,
+         CBICS_cat) 
+
+names(Can_BICS)
+names(das_dep_census)
+
+das_dep_census_cbics <- das_dep_census %>%
+  left_join(Can_BICS,
+            by = c("DAUID"= "dauid"))
+
+Can_BICS_map <- ggmap(basemap) +
+  geom_sf(data = das_dep_census_cbics %>% st_transform(4326), 
+          aes(fill = CBICS_cat), 
+          inherit.aes = FALSE,
+          size = 0.25) + 
+  #scale_fill_manual(values = colour_scheme) +
+  scale_fill_brewer(palette = "PuBuGn") + 
+  labs(col = "Ethno-cultural deprivation") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+Can_BICS_map
+
+Can_ALE_map <- ggmap(basemap) +
+  geom_sf(data = das_bc_census_cbics %>% st_transform(4326), 
+          aes(fill = ale_class), 
+          inherit.aes = FALSE,
+          size = 0.25) + 
+  #scale_fill_manual(values = colour_scheme) +
+  scale_fill_brewer(palette = "PuBu") + 
+  labs(col = "Ethno-cultural deprivation") + 
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+Can_ALE_map
+
+```
+
+Extract to sample points (area weighted means)
+
+* 4 deprivation indices - done
+* bike mode share
+* pop dens
+* Can-BICS
+* Can-ALE
+
+```{r}
+
+ref_pts_predictors <- st_interpolate_aw(das_dep_census_cbics[c("ethno_cultural_score",
+                                                       "situational_vulnerability_score",
+                                                       "economic_dependency_score",
+                                                       "residential_instability_score",
+                                                       "pop_dens",
+                                                       "bike_per",
+                                                       "st_per",
+                                                       "ale_index",
+                                                       "CBICS_cont")],
+                                reference_points %>% st_buffer(100),
+                                extensive = F)
+
+st_write(ref_pts_predictors,
+         "data/ref_pts_predictors.gpkg",
+         delete_dsn = T)
+
+# combine with ref data
+ref_pts_predictors_all <- cbind(reference_points,
+                                ref_pts_predictors %>% st_drop_geometry()) %>%
+  dplyr::select(sample_id,
+                CSDNAME,
+         Can_BICS_ground,
+         Can_BICS_ground_class,
+         Can_BICS_stratum,
+         Can_BICS_stratum_class,
+         Can_BICS,
+         Can_BICS_class,
+         match_osm,
+         match_open_data,
+         ethno_cultural = ethno_cultural_score,
+         situational_vuln = situational_vulnerability_score,
+         economic_depend = economic_dependency_score,
+         residential_instability = residential_instability_score,
+         pop_dens,
+         bike_mode_share = bike_per,
+         sustainable_mode_share = st_per,
+         ale_index,
+         Can_BICS_index = CBICS_cont)
+
+```
+
+
+Plot distributions
+* (correct, incorrect) * (osm, open data)
+
+```{r}
+# ridge plot
+ref_pts_predictors_all_long <- ref_pts_predictors_all %>%
+  st_drop_geometry() %>%
+  data.frame() %>%
+  # filter(CSDNAME %in% "Vancouver") %>% # select geographic subset
+  dplyr::select(!CSDNAME) %>%
+  mutate(match_open_data = factor(match_open_data,
+                               levels = c("TRUE", "FALSE")),
+         match_osm = factor(match_osm,
+                               levels = c("TRUE", "FALSE"))) %>%
+  dplyr::select(!(Can_BICS_ground:Can_BICS_class)) %>%
+  pivot_longer(
+    cols = (! c(sample_id, match_open_data, match_osm)),
+    names_to = "variable")
+
+ref_pts_predictors_all_long$variable <- factor(ref_pts_predictors_all_long$variable,
+                                        levels = c(
+                                          "pop_dens",
+                                          "bike_mode_share",
+                                          "sustainable_mode_share",
+                                          "ale_index",
+                                          "Can_BICS_index",
+                                          "ethno_cultural",
+                                          "situational_vuln",
+                                          "economic_depend",
+                                          "residential_instability"))
+
+library(ggridges)
+colour_scheme <- c("#1f78b4", "#a6cee3")
+library(ggridges)
+osm_ridge <- ref_pts_predictors_all_long %>%
+  ggplot(aes(
+    y = fct_rev(match_osm), 
+    x = value,
+    fill = match_osm)) +
+  scale_fill_manual(values = (colour_scheme)) +
+  geom_density_ridges(alpha = 0.6,
+                      scale = 3) +
+  theme_ridges() +
+  theme(axis.text.y=element_blank()) +
+  #scale_x_continuous(limits = c(0, 5)) +
+  ylab("Density") + 
+  xlab("Value") +
+  labs(fill = "OSM Correct") +
+  facet_wrap(~(variable),
+             ncol = 3,
+             strip.position = "top",
+             scales = "free")
+
+osm_ridge
+
+ggsave(osm_ridge, 
+       width = 8.5,
+       height = 11,
+       units = "in",
+       filename = "results/osm_ridge.png", dpi = 200)
+
+colour_scheme <- c("#33a02c", "#b2df8a")
+
+open_data_ridge <- ref_pts_predictors_all_long %>%
+  ggplot(aes(
+    y = fct_rev(match_open_data), 
+    x = value,
+    fill = match_open_data)) +
+  scale_fill_manual(values = (colour_scheme)) +
+  geom_density_ridges(alpha = 0.6,
+                      scale = 3) +
+  theme_ridges() +
+  theme(axis.text.y=element_blank()) +
+  #scale_x_continuous(limits = c(0, 5)) +
+  ylab("Density") + 
+  xlab("Value") +
+  labs(fill = "Open Data Correct") +
+  facet_wrap(~(variable),
+             ncol = 3,
+             strip.position = "top",
+             scales = "free")
+
+ggsave(open_data_ridge, 
+       width = 8.5,
+       height = 11,
+       units = "in",
+       filename = "results/open_data_ridge.png", dpi = 200)
+
+open_data_ridge
+```
+
+
+Mapathon hotspots
+```{r}
+# select hotspots
+mapathon_edits.KDE.rast[mapathon_edits.KDE.rast < 0.9] <- NA
+mapathon_edits.KDE.rast[mapathon_edits.KDE.rast >= 0.9] <- 1
+plot(mapathon_edits.KDE.rast)
+
+# redefine projection to lambert, not wgs 84!
+crs(mapathon_edits.KDE.rast) <- crs(reference_points)
+
+hotspots <- rasterToPolygons(mapathon_edits.KDE.rast,
+                             dissolve = T) %>%
+  st_as_sf() %>%
+  st_cast("POLYGON") # multipart to singlepart
+
+hotspots$area <- st_area(hotspots)
+# hotspots <- hotspots %>%
+#   filter(as.numeric(area) > 1000000) # must be greater than 1 km 2
+
+# select das touching hotspots
+das_hotspots <- das_dep_census_cbics %>%
+  st_intersection(hotspots)
+
+das_dep_census_cbics$mapathon_hotspot <- das_dep_census_cbics$DAUID %in%
+  das_hotspots$DAUID
+
+das_dep_census_cbics_vanc <- das_dep_census_cbics %>%
+  filter(CSDNAME %in% "Vancouver")
+
+  mapathon_map_hotspots <- ggmap(basemap) +
+    # inset_raster(as.raster(mapathon_edits.KDE.rast.geo),
+    #              xmin = mapathon_edits.KDE.rast.geo@extent[1], 
+    #              xmax = mapathon_edits.KDE.rast.geo@extent[2],
+    #              ymin = mapathon_edits.KDE.rast.geo@extent[3], 
+    #              ymax = mapathon_edits.KDE.rast.geo@extent[4]) +
+    geom_sf(data = das_dep_census_cbics_vanc %>%
+              filter(mapathon_hotspot), 
+          aes(fill = "red"), 
+          inherit.aes = FALSE,
+          size = 3) + 
+  labs(col = "Mapathon edits (hotspots)") +
+  My_Theme +
+  theme_void() +
+  annotation_scale(location = "br", 
+                   width_hint = 0.45,
+                   pad_x = unit(-0.0001, "in")) +
+  annotation_north_arrow(location = "br", which_north = "true", 
+                         pad_x = unit(-0.1, "in"), pad_y = unit(0.25, "in"),
+                         style = north_arrow_minimal)
+
+  mapathon_map
+  
+```
+
+```{r}
+  # hotspot ridge plot
+
+
+das_dep_census_cbics_vanc_long <- das_dep_census_cbics_vanc %>%
+  st_drop_geometry() %>%
+  data.frame() %>%
+    dplyr::select(
+      DAUID,
+      mapathon_hotspot,
+      ethno_cultural = ethno_cultural_score,
+      situational_vuln = situational_vulnerability_score,
+      economic_depend = economic_dependency_score,
+      residential_instability = residential_instability_score,
+      pop_dens,
+      bike_mode_share = bike_per,
+      sustainable_mode_share = st_per,
+      ale_index,
+      Can_BICS_index = CBICS_cont) %>%
+  mutate(mapathon_hotspot = factor(mapathon_hotspot,
+                               levels = c("TRUE", "FALSE"))) %>%
+  pivot_longer(
+    cols = (! c(DAUID, mapathon_hotspot)),
+    names_to = "variable")
+
+das_dep_census_cbics_vanc_long$variable <- factor(das_dep_census_cbics_vanc_long$variable,
+                                        levels = c(
+                                          "pop_dens",
+                                          "bike_mode_share",
+                                          "sustainable_mode_share",
+                                          "ale_index",
+                                          "Can_BICS_index",
+                                          "ethno_cultural",
+                                          "situational_vuln",
+                                          "economic_depend",
+                                          "residential_instability"))
+
+library(ggridges)
+colour_scheme <- c("#6a3d9a", "#cab2d6")
+hotspots_ridge <- das_dep_census_cbics_vanc_long %>%
+  ggplot(aes(
+    y = fct_rev(mapathon_hotspot), 
+    x = value,
+    fill = mapathon_hotspot)) +
+  scale_fill_manual(values = (colour_scheme)) +
+  geom_density_ridges(alpha = 0.6,
+                      scale = 3) +
+  theme_ridges() +
+  theme(axis.text.y=element_blank()) +
+  #scale_x_continuous(limits = c(0, 5)) +
+  ylab("Density") + 
+  xlab("Value") +
+  labs(fill = "Mapathon hotspot (Vancouver)") +
+  facet_wrap(~(variable),
+             ncol = 3,
+             strip.position = "top",
+             scales = "free")
+
+hotspots_ridge
+```
+
+
